@@ -4,9 +4,7 @@
 #include "tokenizer.h"
 #include "file.h"
 #include "memory_arena.h"
-
-Token identifier;
-double numberValue;
+#include "array.h"
 
 Allocator HeapAllocator = {
     malloc,
@@ -29,7 +27,7 @@ Allocator ArenaAllocator = {
 };
 
 enum NodeType {
-    Node_Unknown = 0,
+    Node_Error = 0,
     Node_Number,
     Node_Variable,
     Node_Binary,
@@ -49,62 +47,100 @@ struct Node {
         // Node_Binary
         struct {
             char op;
-            Node* lhs;
-            Node* rhs;            
+            Node *lhs;
+            Node *rhs;            
         };
         
         // Node_Function
         struct {
-            char* callee;
-            u32 argumentCount;
-            Node** arguments;
+            char *callee;
+            Array arguments;
         };
     };
 };
 
 struct Prototype {
-    char* name;
-    char** argumentNames;
+    char *name;
+    char **argumentNames;
 };
 
 struct Function {
-    Prototype* prototype;
-    Node* body;
+    Prototype *prototype;
+    Node *body;
 };
 
-struct Array {
-    void* items;
-    u32 count;
-    u32 capacity;
-    size_t itemSize;
-    
-    Allocator allocator;
-};
+char* AllocString(Token token) {
+    char* mem = (char*)ArenaAlloc(token.length + 1);
+    memcpy(mem, token.text, token.length);
+    mem[token.length] = 0;
+    return mem;
+}
 
-#define InitArray(arr, type, capacity, backingAllocator) \
-    do { \
-        (arr).items = (backingAllocator).alloc(capacity * sizeof(type)); \
-        (arr).count = 0; \
-        (arr).capacity = capacity; \
-        (arr).itemSize = sizeof(type); \
-        (arr).allocator = (backingAllocator); \
-    } while (0)
+Tokenizer tokenizer;
+Array nodes;
+Token currentToken;
 
-void* Next(Array* arr) {
-    if (arr->count >= arr->capacity) {
-        arr->capacity *= 2;
-        void* newItems = arr->allocator.alloc(arr->capacity * arr->itemSize);
-        memcpy(newItems, arr->items, arr->count * arr->itemSize);
-        arr->allocator.free(arr->items);
-        arr->items = newItems;
-        
-        printf("Resized array to %u capacity\n", arr->capacity);
+Node errorNode = {};
+Node* ErrorNode(const char* errorMessage) {
+    errorNode.type = Node_Error;
+    printf("Error: %s\n", errorMessage);
+    return &errorNode;
+}
+
+Node* ParseExpression() {
+    return ErrorNode("ParseExpression is not implemented.");
+}
+
+Node* ParseIdentifier() {
+    Node *node = (Node*)Next(&nodes);
+    Token identifier = currentToken;
+
+    currentToken = GetToken(&tokenizer);
+    if (currentToken.type != Token_OpenParen) {
+        // simple variable reference
+        node->type = Node_Variable;
+        node->variableName = AllocString(identifier);
+        return node;
     }
-
-    void* item = (u8*)arr->items + arr->count * arr->itemSize;
-    arr->count++;
-    return item;
-}; 
+    
+    // function call
+    currentToken = GetToken(&tokenizer);
+    
+    Array arguments = {};
+    InitArray(arguments, Node*, 8, ArenaAllocator);
+    
+    if (currentToken.type != Token_CloseParen) {
+        while (true) {
+            // TOOD(roger): Implement ParseExpression
+            Node *arg = ParseExpression();
+            if (arg->type != Node_Error) {
+                Node **next = (Node**)Next(&arguments);
+                *next = arg;
+            } else {
+                // TODO(roger): Maybe a better way to handle errors?
+                return arg;
+            }
+            
+            if (currentToken.type == Token_OpenParen) {
+                break;
+            }
+            
+            if (currentToken.type == Token_Comma) {
+                return ErrorNode("Expected ')' of ',' in argument list.");
+            }
+            
+            currentToken = GetToken(&tokenizer);
+        }
+    }
+    
+    // Eat the ')'
+    currentToken = GetToken(&tokenizer);
+    
+    node->type = Node_Function;
+    node->callee = AllocString(identifier);
+    node->arguments = arguments;
+    return node;
+}
 
 int main() {
     InitMemoryArena(&globalArena, MEGABYTES(256));    
@@ -115,41 +151,54 @@ int main() {
         printf("Failed to read file!\n");
     }
 
-    Tokenizer tokenizer = {};
     tokenizer.at = file.data;
-
-    Array nodes = {};
-    u32 capacity = 1024;
-    InitArray(nodes, Node, capacity, ArenaAllocator);
+    InitArray(nodes, Node, 1024, ArenaAllocator);
     
     bool running = true;
+    currentToken = GetToken(&tokenizer);
     do {    
-        Token token = GetToken(&tokenizer);
-
-        switch (token.type) {
+        switch (currentToken.type) {
             case Token_EndOfStream: {
                 running = false;
             } break;
         
             case Token_Identifier: {
-                identifier = token;
-                if (TokenEquals(identifier, "def")) {
-                    printf("def\n");
-                } else if (TokenEquals(identifier, "extern")) {
-                    printf("extern\n");
-                }
+                ParseIdentifier();
             } break;
             
             case Token_Number: {
-                double d = TokenToDouble(token);
-                printf("d: %f\n", d);
+                Node *node = (Node*)Next(&nodes);
+                node->type = Node_Number;
+                node->numberValue = TokenToDouble(currentToken); 
+            
+                currentToken = GetToken(&tokenizer);
             } break;
             
             default: {
-                printf("Unhandled token\n");
+                currentToken = GetToken(&tokenizer);
             }
         }
     } while (running);
+    
+    for (u32 i = 0; i < nodes.count; i++) {
+        Node *node = (Node*)GetElement(&nodes, i);
+        switch(node->type) {
+            case Node_Error: {
+            } break;
+        
+            case Node_Variable:  {
+                printf("%s\n", node->variableName);
+            } break;
+            
+            case Node_Function: {
+                printf("Function: %s\n", node->callee);
+            } break;
+            
+            default: {
+                printf("Unhandled node type\n");
+            }
+        }
+    }
 
     return 0;
 }

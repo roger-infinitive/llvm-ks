@@ -80,22 +80,45 @@ Tokenizer tokenizer;
 Array nodes;
 Token currentToken;
 
-Node errorNode = {};
+void NextToken() {
+    currentToken = GetToken(&tokenizer);
+}
+
 Node* ErrorNode(const char* errorMessage) {
-    errorNode.type = Node_Error;
+    Node *node = (Node*)Next(&nodes);
+    node->type = Node_Error;
     printf("Error: %s\n", errorMessage);
-    return &errorNode;
+    return node;
 }
 
 Node* ParseExpression() {
     return ErrorNode("ParseExpression is not implemented.");
 }
 
+Node* ParseNumber() {
+    Node *node = (Node*)Next(&nodes);
+    node->type = Node_Number;
+    node->numberValue = TokenToDouble(currentToken); 
+    
+    NextToken();
+    return node;
+}
+
+Node* ParseParens() {
+    NextToken(); // Eat '('
+    Node* expression = ParseExpression();
+    if (!TokenEquals(currentToken, ")")) {
+        return ErrorNode("Expected ')'");
+    }
+    NextToken(); // Eat ')'
+    return expression;
+}
+
 Node* ParseIdentifier() {
     Node *node = (Node*)Next(&nodes);
     Token identifier = currentToken;
 
-    currentToken = GetToken(&tokenizer);
+    NextToken();
     if (currentToken.type != Token_OpenParen) {
         // simple variable reference
         node->type = Node_Variable;
@@ -104,7 +127,7 @@ Node* ParseIdentifier() {
     }
     
     // function call
-    currentToken = GetToken(&tokenizer);
+    NextToken();
     
     Array arguments = {};
     InitArray(arguments, Node*, 8, ArenaAllocator);
@@ -128,13 +151,12 @@ Node* ParseIdentifier() {
             if (currentToken.type == Token_Comma) {
                 return ErrorNode("Expected ')' of ',' in argument list.");
             }
-            
-            currentToken = GetToken(&tokenizer);
+
+            NextToken();
         }
     }
     
-    // Eat the ')'
-    currentToken = GetToken(&tokenizer);
+    NextToken(); // Eat ')'
     
     node->type = Node_Function;
     node->callee = AllocString(identifier);
@@ -155,7 +177,7 @@ int main() {
     InitArray(nodes, Node, 1024, ArenaAllocator);
     
     bool running = true;
-    currentToken = GetToken(&tokenizer);
+    NextToken();
     do {    
         switch (currentToken.type) {
             case Token_EndOfStream: {
@@ -167,15 +189,15 @@ int main() {
             } break;
             
             case Token_Number: {
-                Node *node = (Node*)Next(&nodes);
-                node->type = Node_Number;
-                node->numberValue = TokenToDouble(currentToken); 
+                ParseNumber();
+            } break;
             
-                currentToken = GetToken(&tokenizer);
+            case Token_OpenParen: {
+                ParseParens();
             } break;
             
             default: {
-                currentToken = GetToken(&tokenizer);
+                ErrorNode("Unknown token!");
             }
         }
     } while (running);
